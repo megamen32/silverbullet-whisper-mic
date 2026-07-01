@@ -38,6 +38,10 @@ import {
 
 export class MainUI {
   viewState: AppViewState = initialViewState;
+  private whisperRecorder?: MediaRecorder;
+  private whisperStream?: MediaStream;
+  private whisperChunks: BlobPart[] = [];
+
 
   constructor(private client: Client) {
     // Make keyboard shortcuts work even when the editor is in read only mode or not focused
@@ -579,6 +583,9 @@ export class MainUI {
           readOnly={
             viewState.uiOptions.forcedROMode || client.bootConfig.readOnly
           }
+          onWhisperTranscribe={() => {
+            void this.toggleWhisperTranscription();
+          }}
         />
         <div id="sb-main">
           {viewState.panels.lhs.mode !== undefined && (
@@ -606,6 +613,170 @@ export class MainUI {
         )}
       </>
     );
+  }
+
+
+  private whisperEndpoint(): string {
+    return globalThis.localStorage?.getItem("silverbulletWhisperEndpoint") ||
+      "/v1/audio/transcriptions";
+  }
+
+  private whisperMimeType(): string | undefined {
+    const candidates = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/mp4",
+      "audio/ogg;codecs=opus",
+      "audio/wav",
+    ];
+    return candidates.find((mimeType) =>
+      typeof MediaRecorder !== "undefined" &&
+      MediaRecorder.isTypeSupported(mimeType)
+    );
+  }
+
+  private whisperFileName(mimeType: string): string {
+    if (mimeType.includes("mp4")) return "voice.m4a";
+    if (mimeType.includes("ogg")) return "voice.ogg";
+    if (mimeType.includes("wav")) return "voice.wav";
+    return "voice.webm";
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private extractWhisperText(body: string): string {
+    let json: { text?: unknown; transcription?: unknown; result?: unknown; error?: unknown };
+    try {
+      json = JSON.parse(body);
+    } catch {
+      throw new Error(`Bad JSON from transcription endpoint: ${body.slice(0, 300)}`);
+    }
+    if (json.error) {
+      const err = json.error as { message?: unknown } | string;
+      throw new Error(typeof err === "string" ? err : String(err.message || "Whisper error"));
+    }
+    const text = json.text ?? json.transcription ?? json.result;
+    if (typeof text !== "string" || !text.trim()) {
+      throw new Error(`No transcription text in response: ${body.slice(0, 300)}`);
+    }
+    return text.trim();
+  }
+
+  private async fetchWhisperText(blob: Blob): Promise<string> {
+    let attempt = 0;
+    for (;;) {
+      attempt += 1;
+      const backoffMs = Math.min(30_000, 1000 * Math.pow(2, Math.min(attempt - 1, 5)));
+      try {
+        const controller = new AbortController();
+        const timeout = globalThis.setTimeout(() => controller.abort(), 120_000);
+        try {
+          const form = new FormData();
+          form.append("file", blob, this.whisperFileName(blob.type));
+          form.append("model", "whisper-1");
+          form.append("response_format", "json");
+          this.flashNotification(`🎙 Transcribing audio, attempt ${attempt}...`, "info");
+          const response = await fetch(this.whisperEndpoint(), {
+            method: "POST",
+            body: form,
+            signal: controller.signal,
+          });
+          const body = await response.text();
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${body.slice(0, 300)}`);
+          }
+          return this.extractWhisperText(body);
+        } finally {
+          globalThis.clearTimeout(timeout);
+        }
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        this.flashNotification(
+          `🎙 Transcription failed; retrying in ${Math.round(backoffMs / 1000)}s: ${message}`,
+          "error",
+        );
+        await this.sleep(backoffMs);
+      }
+    }
+  }
+
+  private insertAtCursor(text: string) {
+    const editorView = this.client.editorView;
+    const from = editorView.state.selection.main.from;
+    const insert = text.endsWith(" ") || text.endsWith("\n") ? text : `${text} `;
+    editorView.dispatch({
+      changes: { insert, from },
+      selection: { anchor: from + insert.length },
+      scrollIntoView: true,
+    });
+    this.client.focus();
+  }
+
+  private setMicRecordingClass(recording: boolean) {
+    document
+      .querySelector(".sb-whisper-mic-button")
+      ?.classList.toggle("recording", recording);
+  }
+
+  async toggleWhisperTranscription() {
+    if (this.whisperRecorder?.state === "recording") {
+      this.flashNotification("🎙 Stopping recording...", "info");
+      this.whisperRecorder.stop();
+      return;
+    }
+
+    if (!globalThis.navigator?.mediaDevices?.getUserMedia) {
+      this.flashNotification("Microphone recording is not available in this browser", "error");
+      return;
+    }
+
+    try {
+      const stream = await globalThis.navigator.mediaDevices.getUserMedia({ audio: true });
+      this.whisperStream = stream;
+      this.whisperChunks = [];
+      const mimeType = this.whisperMimeType();
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+      this.whisperRecorder = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          this.whisperChunks.push(event.data);
+        }
+      };
+      recorder.onerror = (event) => {
+        this.flashNotification(`🎙 Recorder error: ${event.error.message}`, "error");
+      };
+      recorder.onstop = () => {
+        this.setMicRecordingClass(false);
+        const recordedMimeType = recorder.mimeType || mimeType || "audio/webm";
+        const blob = new Blob(this.whisperChunks, { type: recordedMimeType });
+        this.whisperChunks = [];
+        this.whisperStream?.getTracks().forEach((track) => track.stop());
+        this.whisperStream = undefined;
+        this.whisperRecorder = undefined;
+        if (!blob.size) {
+          this.flashNotification("🎙 Empty recording; nothing to transcribe", "error");
+          return;
+        }
+        safeRun(async () => {
+          const text = await this.fetchWhisperText(blob);
+          this.insertAtCursor(text);
+          this.flashNotification("🎙 Transcription inserted", "info");
+        });
+      };
+      recorder.start();
+      this.setMicRecordingClass(true);
+      this.flashNotification("🎙 Recording. Click the mic again to stop and transcribe.", "info", { timeout: 7000 });
+    } catch (e) {
+      this.setMicRecordingClass(false);
+      this.whisperStream?.getTracks().forEach((track) => track.stop());
+      this.whisperStream = undefined;
+      const message = e instanceof Error ? e.message : String(e);
+      this.flashNotification(`🎙 Could not start microphone: ${message}`, "error");
+    }
   }
 
   render(container: Element) {

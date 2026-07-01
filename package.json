@@ -2,7 +2,7 @@
   "name": "@silverbulletmd/silverbullet",
   "version": "2.9.0",
   "type": "module",
-  "description": "A self-hosted, web-based note taking app",
+  "description": "SilverBullet fork with a built-in OpenAI-compatible Whisper microphone transcription button",
   "publishConfig": {
     "access": "public"
   },
@@ -131,5 +131,15 @@
   "engines": {
     "node": ">=24.13.0",
     "npm": ">=10.0.0"
-  }
+  },
+  "keywords": [
+    "silverbullet",
+    "whisper",
+    "openai",
+    "transcription",
+    "microphone",
+    "pwa",
+    "self-hosted",
+    "notes"
+  ]
 }

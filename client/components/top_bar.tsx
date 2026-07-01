@@ -1,4 +1,5 @@
 import type { ComponentChildren, FunctionalComponent } from "preact";
+import { Mic } from "preact-feather";
 import { createPortal } from "preact/compat";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Notification } from "@silverbulletmd/silverbullet/type/client";
@@ -209,6 +210,7 @@ export function TopBar({
   cssClass,
   mobileMenuStyle,
   readOnly,
+  onWhisperTranscribe,
 }: {
   pageName?: string;
   unsavedChanges: boolean;
@@ -226,12 +228,27 @@ export function TopBar({
   cssClass?: string;
   mobileMenuStyle?: string;
   readOnly: boolean;
+  onWhisperTranscribe?: () => void;
 }) {
   return (
     <div
       id="sb-top"
       className={isOnline ? undefined : "sb-sync-error"}
     >
+      {onWhisperTranscribe && (
+        <button
+          type="button"
+          className="sb-whisper-mic-button"
+          title="Record and transcribe voice"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onWhisperTranscribe();
+          }}
+        >
+          <Mic size={20} />
+        </button>
+      )}
       {lhs}
       <div className="main">
         <div className="inner">

@@ -1,127 +1,82 @@
-![GitHub Repo stars](https://img.shields.io/github/stars/silverbulletmd/silverbullet)
-![Docker Pulls](https://img.shields.io/docker/pulls/zefhemel/silverbullet)
-![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/silverbulletmd/silverbullet/total)
-![GitHub contributors](https://img.shields.io/github/contributors/silverbulletmd/silverbullet)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/silverbulletmd/silverbullet)
+# SilverBullet Whisper Mic
 
-# SilverBullet
-SilverBullet is a Programmable, Private, Browser-based, Open Source, Self Hosted, Personal Knowledge Database — a fancy term for a "notes app on steroids".
+A small fork of [SilverBullet](https://github.com/silverbulletmd/silverbullet) that adds a built-in microphone button to the top-left corner of the web UI.
 
-_Yowza!_ That surely is a lot of adjectives to describe a browser-based Markdown editor programmable with Lua.
+The button records audio in the browser with `getUserMedia` and `MediaRecorder`, sends the recording to an OpenAI-compatible transcription endpoint, retries transient failures with exponential backoff, and inserts the returned transcript at the current cursor position.
 
-Let’s get more specific.
+## What this fork changes
 
-SilverBullet combines a clean live-preview editor with wiki-style linking, a built-in database and query language, and a fully integrated Space Lua scripting environment, turning your notes into a programmable system that grows with you.
+- Adds a global microphone icon in the SilverBullet top bar.
+- First click starts recording; the icon turns red while recording.
+- Second click stops recording and starts transcription.
+- Audio is not saved into the space and no file-upload/save dialog is shown.
+- The browser sends `multipart/form-data` to an OpenAI-compatible endpoint.
+- The default endpoint is same-origin:
 
-In SilverBullet you keep your content as a collection of Markdown Pages (called a Space). You navigate your space using the Page Picker like a traditional notes app, or through Links like a wiki (except they are bi-directional).
-
-If you are the **writer** type, you’ll appreciate SilverBullet as a clean Markdown editor with Live Preview. If you have more of an **outliner** personality, SilverBullet has Outlining tools for you. Productivity freak? Have a look at Tasks. More of a **database** person? You will appreciate Objects and Queries (SLIQ). 
-
-And if you are comfortable **programming** a little bit — now we’re really talking. You will love _dynamically generating content_ with Space Lua (SilverBullet’s Lua dialect), or to use it to create custom Commands, Page Templates or Widgets.
-
-You were told there’s no such thing as a silver bullet. You were told wrong.
-
-[Much more detail can be found on silverbullet.md](https://silverbullet.md)
-
-## Installing SilverBullet
-Check out the [instructions](https://silverbullet.md/Install).
-
-## Developing SilverBullet
-SilverBullet's frontend ("client") is written in [TypeScript](https://www.typescriptlang.org/) and built on top of the excellent [CodeMirror 6](https://codemirror.net/) editor component. Additional UI is built using [Preact](https://preactjs.com). [ESBuild](https://esbuild.github.io) is used to build the frontend.
-
-The server backend is written in [Rust](https://www.rust-lang.org/) (a Cargo workspace). It serves the pre-built client bundle, the file/space HTTP API, authentication, and a headless-Chrome runtime for server-side Lua.
-
-## Code structure
-* `bin/silverbullet/`: The standalone `silverbullet` server binary (Rust) (this is the one you generally run)
-* `bin/sb/`: The `sb` CLI client (Rust)
-* `bin/plug-compile.ts`: the plug compiler
-* `client/`: The SilverBullet client (browser, TypeScript)
-* `server/`: The SilverBullet server library (Rust): HTTP router, handlers, auth, runtime seam
-* `server-common/`: Shared Rust crate (space primitives, shared types)
-* `server-runtime-chrome/`: Headless-Chrome runtime backend (Rust)
-* `plugs`: Set of built-in plugs (TypeScript) that are distributed with SilverBullet
-* `libraries`: A set of libraries (space scripts, page templates, slash templates) distributed with SilverBullet (Space Lua)
-* `plug-api/`: Useful APIs for use in plugs and published to NPM
-  * `lib/`: Useful libraries to be used in plugs
-  * `syscalls/`: TypeScript wrappers around syscalls
-  * `types/`: Various (client) types that can be references from plugs
-* `scripts/`: Useful scripts
-* `docs/`: documentation (also serves a silverbullet.md website content)
-
-### Requirements
-* [Node.js](https://nodejs.org/) 24+ and npm 10+: Used to build the frontend (client) and plugs
-* [Rust](https://www.rust-lang.org/tools/install) (stable, via `rustup`): Used to build the server
-
-The project includes `.nvmrc` and `.node-version` files. If you use [nvm](https://github.com/nvm-sh/nvm) or another Node version manager, it will automatically use the correct Node.js version:
-
-```shell
-nvm use  # If using nvm
+```text
+/v1/audio/transcriptions
 ```
 
-First, install dependencies:
+This is intended to be served by your own reverse proxy, which can inject the API key server-side. The API key is not stored in browser code.
 
-```shell
-make setup
+## Endpoint contract
+
+The transcription endpoint should behave like OpenAI's audio transcription API:
+
+```http
+POST /v1/audio/transcriptions
+Content-Type: multipart/form-data
 ```
 
-To create a (release) build:
+Fields:
 
-```shell
-make
+- `file`: recorded audio blob
+- `model`: `whisper-1`
+- `response_format`: `json`
+
+Expected JSON response:
+
+```json
+{"text":"transcribed text"}
 ```
 
-This will produce `silverbullet` and `cli` binaries in `./target/release/`, run `./target/release/silverbullet` to run the server.
+For compatibility, this fork also accepts `transcription` or `result` string fields.
 
-### Development workflow
+## Runtime configuration
 
-SilverBullet has two halves you rebuild **independently**:
+By default the UI posts to:
 
-* The **client** (TypeScript: `client/`) is built by ESBuild into `client_bundle/`, which the server then serves.
-* The **server** (Rust: `server/`, `server-common/`, `server-runtime-chrome/`, `bin/silverbullet/`) is a compiled binary.
+```text
+/v1/audio/transcriptions
+```
 
-Run the server in development with `cargo run`. A **debug** build serves the client bundle **live from `client_bundle/` on disk** (a release build embeds it instead):
+For testing, you can override it in the browser console:
 
-```shell
+```js
+localStorage.setItem("silverbulletWhisperEndpoint", "https://your-proxy.example.com/v1/audio/transcriptions")
+```
+
+Then reload SilverBullet.
+
+## Deployment note
+
+Do not put OpenAI or Whisper API keys into browser JavaScript. Put the key in a server-side reverse proxy, for example nginx, and expose a same-origin `/v1/audio/transcriptions` endpoint to SilverBullet.
+
+## Build
+
+```bash
+npm ci
 npm run build
-cargo run <PATH-TO-YOUR-SPACE>
+cargo build --release -p silverbullet --target x86_64-unknown-linux-musl
+cp target/x86_64-unknown-linux-musl/release/silverbullet silverbullet-amd64
+docker build -t silverbullet-whisper-mic:latest .
+docker build -f Dockerfile.runtime-api --build-arg BASE_IMAGE=silverbullet-whisper-mic:latest -t silverbullet-whisper-mic:runtime-api .
 ```
 
-**When you change only the client** (TypeScript in `client/`): you do **not** need to restart the server. Rebuild just the client bundle and reload the page in your browser — the debug server serves the freshly-built bundle straight from disk:
+## Tags
 
-```shell
-npm run build
-```
+`silverbullet`, `whisper`, `openai`, `transcription`, `microphone`, `pwa`, `self-hosted`, `notes`
 
-To build a self-contained **release** binary (with the client bundle embedded), and run it:
+## License
 
-```shell
-make
-./target/release/silverbullet <PATH-TO-YOUR-SPACE>
-```
-
-### Useful development tasks
-
-```shell
-# Clean all generated files
-make clean
-# Typecheck and lint all code
-make check
-# Format all code
-make fmt
-# Run all tests
-make test
-# Run benchmarks
-make bench
-```
-
-### Build a docker container
-Note, you do not need Node.js nor Go locally installed for this to work:
-
-```shell
-docker build -t silverbullet .
-```
-
-To run:
-```shell
-docker run -p 3000:3000 -v <PATH-TO-YOUR-SPACE>:/space silverbullet
-```
+MIT, same as upstream SilverBullet.

@@ -64,6 +64,38 @@
     }
   }
 
+
+  .sb-whisper-mic-button {
+    align-self: center;
+    margin: 0 6px 0 8px;
+    padding: 6px;
+    height: 34px;
+    width: 34px;
+    border: 0;
+    border-radius: 50%;
+    color: var(--action-button-color);
+    background: var(--action-button-background-color);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+
+    &:hover {
+      color: var(--action-button-hover-color);
+    }
+
+    &.recording {
+      color: white;
+      background: #d32222;
+      animation: sb-whisper-pulse 1s infinite alternate;
+    }
+  }
+
+  @keyframes sb-whisper-pulse {
+    from { transform: scale(1); }
+    to { transform: scale(1.08); }
+  }
+
   .sb-actions {
     display: flex;
     flex: 0 0 auto;
